@@ -1,9 +1,5 @@
 # # terraform.tfvars
 
-#provider variable key value
-aws_access_key = "aaaaaaaaaaaaaaaaaaaaa"
-aws_secret_key = "aaaaaaaaaaaaaaaaaa"
-
 
 ssmautomation = {
     document-name = "MyCustomSSMDocument"
