@@ -12,11 +12,11 @@ Parameters:
     Description: Name of the Backup Plan.
   BackupTagKey:
     Type: String
-    Default: Backup
+    Default: Name
     Description: Tag key to identify EC2 instances for backup.
   BackupTagValue:
     Type: String
-    Default: True
+    Default: ops-server-vpn
     Description: Tag value to identify EC2 instances for backup.
   InstanceType:
     Type: String
@@ -81,11 +81,12 @@ Resources:
       FunctionName: ops-server-function
       Handler: index.lambda_handler
       Runtime: python3.9
-      Role: !Ref LambdaExecutionRoleArn
+      Role: !Ref  LambdaExecutionRoleArn
       Code:
-        ZipFile: |     
+        ZipFile: |
           import json
           import boto3
+          import os
           import time
           from datetime import datetime
 
@@ -101,6 +102,15 @@ Resources:
 
           def lambda_handler(event, context):
               try:
+                  # Retrieve environment variables
+                  backup_tag_key = os.environ['BACKUP_TAG_KEY']
+                  backup_tag_value = os.environ['BACKUP_TAG_VALUE']
+                  instance_type = os.environ['INSTANCE_TYPE']
+                  vpc_id = os.environ['VPC_ID']
+                  subnet_id = os.environ['SUBNET_ID']
+                  eip_allocation_id = os.environ['EIP_ALLOCATION_ID']
+                  iam_role_arn = os.environ['ROLE_ARN']
+
                   # Extract instance details from the event
                   instance_id = event['detail']['instance-id']
                   region = context.invoked_function_arn.split(":")[3]
@@ -111,10 +121,10 @@ Resources:
                   tags = instance_description['Reservations'][0]['Instances'][0].get('Tags', [])
 
                   # Check if the instance has the specified tag
-                  should_backup = any(tag['Key'] == BackupTagKey and tag['Value'] == BackupTagValue for tag in tags)
+                  should_backup = any(tag['Key'] == backup_tag_key and tag['Value'] == backup_tag_value for tag in tags)
 
                   if not should_backup:
-                      print(f"Instance {instance_id} does not have the {BackupTagKey}: {BackupTagValue} tag. Skipping restore.")
+                      print(f"Instance {instance_id} does not have the {backup_tag_key}: {backup_tag_value} tag. Skipping restore.")
                       return {
                           'statusCode': 200,
                           'body': json.dumps('Instance does not require backup.')
@@ -142,11 +152,11 @@ Resources:
                   restore_job = backup_client.start_restore_job(
                       RecoveryPointArn=recovery_point_arn,
                       Metadata={
-                          'InstanceType': InstanceType,
-                          'VpcId': VpcId,
-                          'SubnetId': SubnetId
+                          'InstanceType': instance_type,
+                          'VpcId': vpc_id,
+                          'SubnetId': subnet_id
                       },
-                      IamRoleArn='arn:aws:iam::944347495097:role/iamrole',
+                      IamRoleArn=iam_role_arn,
                       ResourceType='EC2'
                   )
 
@@ -158,7 +168,7 @@ Resources:
                   while True:
                       job_status_response = backup_client.describe_restore_job(RestoreJobId=restore_job_id)
                       job_status = job_status_response['Status']
-                      
+
                       if job_status == 'COMPLETED':
                           print("Restore job completed successfully.")
                           break
@@ -177,7 +187,7 @@ Resources:
 
                   # Describe restore job to get the ARN of the restored instance
                   restored_resource_arn = job_status_response['CreatedResourceArn']
-                
+
                   # Extract the instance ID from the ARN
                   restored_instance_id = restored_resource_arn.split('/')[-1]
 
@@ -200,7 +210,6 @@ Resources:
                   print(f"Restored instance {restored_instance_id} tagged with {tags}")
 
                   # **Associate the Elastic IP (EIP) with the restored instance**
-                  eip_allocation_id = EipAllocationId
                   ec2_client.associate_address(
                       InstanceId=restored_instance_id,
                       AllocationId=eip_allocation_id
@@ -218,6 +227,18 @@ Resources:
                       'statusCode': 500,
                       'body': json.dumps(f'Error: {str(e)}', default=convert_to_string)
                   }
+
+      Environment:
+        Variables:
+          BACKUP_TAG_KEY: !Ref BackupTagKey
+          BACKUP_TAG_VALUE: !Ref BackupTagValue
+          INSTANCE_TYPE: !Ref InstanceType
+          VPC_ID: !Ref VpcId
+          SUBNET_ID: !Ref SubnetId
+          EIP_ALLOCATION_ID: !Ref EipAllocationId
+          ROLE_ARN: !Ref BackupselectionIAMRoleArn
+
+
  
   EC2TerminationRule:
     Type: AWS::Events::Rule
