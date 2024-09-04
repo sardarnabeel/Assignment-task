@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: AWS Backup for vpn EC2 instance with EventBridge and Lambda function
+Description: AWS Backup for VPN EC2 instance with EventBridge and Lambda function
 
 Parameters:
   BackupVaultName:
@@ -18,8 +18,30 @@ Parameters:
     Type: String
     Default: True
     Description: Tag value to identify EC2 instances for backup.
-
-
+  InstanceType:
+    Type: String
+    Default: t2.micro
+    Description: Instance type for the restored instance.
+  VpcId:
+    Type: String
+    Default: vpc-044c1fa534ba95311
+    Description: VPC ID for the restored instance.
+  SubnetId:
+    Type: String
+    Default: subnet-0f44bc299c39f8fff
+    Description: Subnet ID for the restored instance.
+  EipAllocationId:
+    Type: String
+    Default: eipalloc-00bdada52bd59aac4
+    Description: Elastic IP allocation ID.
+  BackupselectionIAMRoleArn:
+    Type: String
+    Default: arn:aws:iam::944347495097:role/iamrole 
+    Description: ARN of the IAM role for Backupselection iamrole.
+  LambdaExecutionRoleArn:
+    Type: String
+    Default: arn:aws:iam::944347495097:role/lambdaexcrole
+    Description: ARN of the IAM role for Lambda function execution.
 Resources:
   BackupVault:
     Type: AWS::Backup::BackupVault
@@ -47,7 +69,7 @@ Resources:
       BackupPlanId: !Ref BackupPlan
       BackupSelection:
         SelectionName: ops-BackupSelection
-        IamRoleArn: arn:aws:iam::123456:role/iamrole 
+        IamRoleArn: !Ref BackupselectionIAMRoleArn
         ListOfTags:
           - ConditionType: STRINGEQUALS
             ConditionKey: !Ref BackupTagKey
@@ -59,7 +81,7 @@ Resources:
       FunctionName: ops-server-function
       Handler: index.lambda_handler
       Runtime: python3.9
-      Role: arn:aws:iam::123456:role/lambdaexcrole
+      Role: !Ref LambdaExecutionRoleArn
       Code:
         ZipFile: |     
           import json
@@ -84,16 +106,15 @@ Resources:
                   region = context.invoked_function_arn.split(":")[3]
                   account_id = context.invoked_function_arn.split(":")[4]
 
-
                   # Describe the instance to check for tags
                   instance_description = ec2_client.describe_instances(InstanceIds=[instance_id])
                   tags = instance_description['Reservations'][0]['Instances'][0].get('Tags', [])
 
-                  # Check if the instance has the  tag
-                  should_backup = any(tag['Key'] == 'Name' and tag['Value'] == 'ops-vpn-server' for tag in tags)
+                  # Check if the instance has the specified tag
+                  should_backup = any(tag['Key'] == BackupTagKey and tag['Value'] == BackupTagValue for tag in tags)
 
                   if not should_backup:
-                      print(f"Instance {instance_id} does not have the Backup: True tag. Skipping restore.")
+                      print(f"Instance {instance_id} does not have the {BackupTagKey}: {BackupTagValue} tag. Skipping restore.")
                       return {
                           'statusCode': 200,
                           'body': json.dumps('Instance does not require backup.')
@@ -114,16 +135,16 @@ Resources:
                       }
 
                   # Get the latest recovery point
-                  latest_recovery_point = response['RecoveryPoints'][0]
+                  latest_recovery_point = sorted(response['RecoveryPoints'], key=lambda x: x['CreationDate'], reverse=True)[0]
                   recovery_point_arn = latest_recovery_point['RecoveryPointArn']
 
                   # Start restore job
                   restore_job = backup_client.start_restore_job(
                       RecoveryPointArn=recovery_point_arn,
                       Metadata={
-                          'InstanceType': 't2.micro',  # Adjust as needed
-                          'VpcId': 'vpc-044c1fa534ba95311',  # Adjust as needed
-                          'SubnetId': 'subnet-0f44bc299c39f8fff'  # Adjust as needed
+                          'InstanceType': InstanceType,
+                          'VpcId': VpcId,
+                          'SubnetId': SubnetId
                       },
                       IamRoleArn='arn:aws:iam::944347495097:role/iamrole',
                       ResourceType='EC2'
@@ -160,7 +181,7 @@ Resources:
                   # Extract the instance ID from the ARN
                   restored_instance_id = restored_resource_arn.split('/')[-1]
 
-                  # Set the 'Name' tag with value 'vpn-server' on the restored instance
+                  # Set the 'Name' tag with value 'ops-vpn-server' on the restored instance
                   tags = [
                       {
                           'Key': 'Name',
@@ -179,7 +200,7 @@ Resources:
                   print(f"Restored instance {restored_instance_id} tagged with {tags}")
 
                   # **Associate the Elastic IP (EIP) with the restored instance**
-                  eip_allocation_id = 'eipalloc-00bdada52bd59aac4'  # Replace with your actual EIP allocation ID
+                  eip_allocation_id = EipAllocationId
                   ec2_client.associate_address(
                       InstanceId=restored_instance_id,
                       AllocationId=eip_allocation_id
