@@ -5,7 +5,7 @@ aws_access_key = "aaaaaaaaaaaaaaaaaaaaa"
 aws_secret_key = "aaaaaaaaaaaaaaaaaa"
 
 
-ssm-automation = {
+ssmautomation = {
     document-name = "MyCustomSSMDocument"
 }
 

@@ -9,6 +9,7 @@ module "ssm_automation" {
 module "eventbridge_ssm" {
   source          = "./modules/eventbridge_ssm"
   eventbridge = var.eventbridge
+  
 }
 
 output "automation_document_name" {
