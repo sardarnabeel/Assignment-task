@@ -16,7 +16,7 @@
         "AutomationAssumeRole": {
             "type": "String",
             "description": "(Required) The ARN of the role that allows Automation to perform the actions on your behalf.",
-            "default": "arn:aws:iam::944347495097:role/AutomationServiceRole"
+            "default": "arn:aws:iam::123456:role/AutomationServiceRole"
         },
         "TargetAmiName": {
             "type": "String",
