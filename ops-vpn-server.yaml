@@ -42,7 +42,7 @@ Resources:
         ListOfTags:
           - ConditionType: STRINGEQUALS
             ConditionKey: "Name"
-            ConditionValue: "vpn-server"
+            ConditionValue: "ops-vpn-server"
 
   RestoreLambdaFunction:
     Type: AWS::Lambda::Function
@@ -81,7 +81,7 @@ Resources:
                   tags = instance_description['Reservations'][0]['Instances'][0].get('Tags', [])
 
                   # Check if the instance has the  tag
-                  should_backup = any(tag['Key'] == 'Name' and tag['Value'] == 'vpn-server' for tag in tags)
+                  should_backup = any(tag['Key'] == 'Name' and tag['Value'] == 'ops-vpn-server' for tag in tags)
 
                   if not should_backup:
                       print(f"Instance {instance_id} does not have the Backup: True tag. Skipping restore.")
@@ -155,7 +155,7 @@ Resources:
                   tags = [
                       {
                           'Key': 'Name',
-                          'Value': 'vpn-server'
+                          'Value': 'ops-vpn-server'
                       }
                   ]
 
