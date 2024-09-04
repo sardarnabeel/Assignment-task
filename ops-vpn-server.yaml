@@ -10,6 +10,15 @@ Parameters:
     Type: String
     Default: ops-BackupPlan
     Description: Name of the Backup Plan.
+  BackupTagKey:
+    Type: String
+    Default: Backup
+    Description: Tag key to identify EC2 instances for backup.
+  BackupTagValue:
+    Type: String
+    Default: True
+    Description: Tag value to identify EC2 instances for backup.
+
 
 Resources:
   BackupVault:
@@ -41,8 +50,8 @@ Resources:
         IamRoleArn: arn:aws:iam::123456:role/iamrole 
         ListOfTags:
           - ConditionType: STRINGEQUALS
-            ConditionKey: "Name"
-            ConditionValue: "ops-vpn-server"
+            ConditionKey: !Ref BackupTagKey
+            ConditionValue: !Ref BackupTagValue
 
   RestoreLambdaFunction:
     Type: AWS::Lambda::Function
