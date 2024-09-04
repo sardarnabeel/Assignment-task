@@ -38,7 +38,7 @@ Resources:
       BackupPlanId: !Ref BackupPlan
       BackupSelection:
         SelectionName: ops-BackupSelection
-        IamRoleArn: arn:aws:iam::944347495097:role/iamrole 
+        IamRoleArn: arn:aws:iam::123456:role/iamrole 
         ListOfTags:
           - ConditionType: STRINGEQUALS
             ConditionKey: "Name"
@@ -50,7 +50,7 @@ Resources:
       FunctionName: ops-server-function
       Handler: index.lambda_handler
       Runtime: python3.9
-      Role: arn:aws:iam::944347495097:role/lambdaexcrole
+      Role: arn:aws:iam::123456:role/lambdaexcrole
       Code:
         ZipFile: |     
           import json
