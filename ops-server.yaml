@@ -1,0 +1,222 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: AWS Backup for vpn EC2 instance with EventBridge and Lambda function
+
+Parameters:
+  BackupVaultName:
+    Type: String
+    Default: ops-BackupVault
+    Description: Name of the Backup Vault to store backups.
+  BackupPlanName:
+    Type: String
+    Default: ops-BackupPlan
+    Description: Name of the Backup Plan.
+
+Resources:
+  BackupVault:
+    Type: AWS::Backup::BackupVault
+    Properties:
+      BackupVaultName: !Ref BackupVaultName
+
+  BackupPlan:
+    Type: AWS::Backup::BackupPlan
+    Properties:
+      BackupPlan:
+        BackupPlanName: !Ref BackupPlanName
+        BackupPlanRule:
+          - RuleName: HourlyBackup
+            TargetBackupVault: !Ref BackupVault
+            ScheduleExpression: cron(0 * * * ? *) # Hourly backup
+            StartWindowMinutes: 60
+            CompletionWindowMinutes: 120
+            Lifecycle:
+              DeleteAfterDays: 30  
+
+  BackupSelection:
+    Type: AWS::Backup::BackupSelection
+    DependsOn: BackupPlan
+    Properties:
+      BackupPlanId: !Ref BackupPlan
+      BackupSelection:
+        SelectionName: ops-BackupSelection
+        IamRoleArn: arn:aws:iam::944347495097:role/iamrole 
+        ListOfTags:
+          - ConditionType: STRINGEQUALS
+            ConditionKey: "Name"
+            ConditionValue: "vpn-server"
+
+  RestoreLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: ops-server-function
+      Handler: index.lambda_handler
+      Runtime: python3.9
+      Role: arn:aws:iam::944347495097:role/lambdaexcrole
+      Code:
+        ZipFile: |     
+          import json
+          import boto3
+          import time
+          from datetime import datetime
+
+          # Initialize clients
+          ec2_client = boto3.client('ec2')
+          backup_client = boto3.client('backup')
+
+          def convert_to_string(obj):
+              """ Helper function to convert datetime objects to strings """
+              if isinstance(obj, datetime):
+                  return obj.isoformat()
+              raise TypeError("Type not serializable")
+
+          def lambda_handler(event, context):
+              try:
+                  # Extract instance details from the event
+                  instance_id = event['detail']['instance-id']
+                  region = context.invoked_function_arn.split(":")[3]
+                  account_id = context.invoked_function_arn.split(":")[4]
+
+
+                  # Describe the instance to check for tags
+                  instance_description = ec2_client.describe_instances(InstanceIds=[instance_id])
+                  tags = instance_description['Reservations'][0]['Instances'][0].get('Tags', [])
+
+                  # Check if the instance has the  tag
+                  should_backup = any(tag['Key'] == 'Name' and tag['Value'] == 'vpn-server' for tag in tags)
+
+                  if not should_backup:
+                      print(f"Instance {instance_id} does not have the Backup: True tag. Skipping restore.")
+                      return {
+                          'statusCode': 200,
+                          'body': json.dumps('Instance does not require backup.')
+                      }
+
+                  # Get the ARN of the terminated instance
+                  ec2_arn = f'arn:aws:ec2:{region}:{account_id}:instance/{instance_id}'
+
+                  # List recovery points
+                  response = backup_client.list_recovery_points_by_resource(
+                      ResourceArn=ec2_arn
+                  )
+                  if not response['RecoveryPoints']:
+                      print("No recovery points found for instance:", instance_id)
+                      return {
+                          'statusCode': 404,
+                          'body': json.dumps('No recovery points found')
+                      }
+
+                  # Get the latest recovery point
+                  latest_recovery_point = response['RecoveryPoints'][0]
+                  recovery_point_arn = latest_recovery_point['RecoveryPointArn']
+
+                  # Start restore job
+                  restore_job = backup_client.start_restore_job(
+                      RecoveryPointArn=recovery_point_arn,
+                      Metadata={
+                          'InstanceType': 't2.micro',  # Adjust as needed
+                          'VpcId': 'vpc-044c1fa534ba95311',  # Adjust as needed
+                          'SubnetId': 'subnet-0f44bc299c39f8fff'  # Adjust as needed
+                      },
+                      IamRoleArn='arn:aws:iam::944347495097:role/iamrole',
+                      ResourceType='EC2'
+                  )
+
+                  print("Restore job started:", restore_job['RestoreJobId'])
+
+                  restore_job_id = restore_job['RestoreJobId']
+
+                  # Polling mechanism to check the status of the restore job
+                  while True:
+                      job_status_response = backup_client.describe_restore_job(RestoreJobId=restore_job_id)
+                      job_status = job_status_response['Status']
+                      
+                      if job_status == 'COMPLETED':
+                          print("Restore job completed successfully.")
+                          break
+                      elif job_status == 'FAILED':
+                          print(f"Restore job failed: {job_status_response['StatusMessage']}")
+                          return {
+                              'statusCode': 500,
+                              'body': json.dumps(f"Restore job failed: {job_status_response['StatusMessage']}", default=convert_to_string)
+                          }
+                      else:
+                          print(f"Restore job in progress, current status: {job_status}. Waiting for completion...")
+                          time.sleep(60)  # Increased waiting time before checking again
+
+                  # Wait for a bit longer to ensure the instance is fully available
+                  time.sleep(180)  # Increased wait time for instance availability
+
+                  # Describe restore job to get the ARN of the restored instance
+                  restored_resource_arn = job_status_response['CreatedResourceArn']
+                
+                  # Extract the instance ID from the ARN
+                  restored_instance_id = restored_resource_arn.split('/')[-1]
+
+                  # Set the 'Name' tag with value 'vpn-server' on the restored instance
+                  tags = [
+                      {
+                          'Key': 'Name',
+                          'Value': 'vpn-server'
+                      }
+                  ]
+
+                  # Debug: Print tags being applied
+                  print(f"Applying tag {tags} to instance {restored_instance_id}")
+
+                  # Set the tags on the restored instance
+                  ec2_client.create_tags(
+                      Resources=[restored_instance_id],
+                      Tags=tags
+                  )
+                  print(f"Restored instance {restored_instance_id} tagged with {tags}")
+
+                  # **Associate the Elastic IP (EIP) with the restored instance**
+                  eip_allocation_id = 'eipalloc-00bdada52bd59aac4'  # Replace with your actual EIP allocation ID
+                  ec2_client.associate_address(
+                      InstanceId=restored_instance_id,
+                      AllocationId=eip_allocation_id
+                  )
+                  print(f"Elastic IP {eip_allocation_id} associated with instance {restored_instance_id}")
+
+                  return {
+                      'statusCode': 200,
+                      'body': json.dumps('Restore job, tagging, and EIP association completed successfully')
+                  }
+
+              except Exception as e:
+                  print(f"Error occurred: {str(e)}")
+                  return {
+                      'statusCode': 500,
+                      'body': json.dumps(f'Error: {str(e)}', default=convert_to_string)
+                  }
+ 
+  EC2TerminationRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: EC2TerminationEventRule
+      EventPattern:
+        source:
+          - "aws.ec2"
+        detail-type:
+          - "EC2 Instance State-change Notification"
+        detail:
+          state:
+            - "terminated"
+      Targets:
+        - Id: "RestoreLambdaFunction"
+          Arn: !GetAtt RestoreLambdaFunction.Arn
+
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref RestoreLambdaFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt EC2TerminationRule.Arn
+
+Outputs:
+  RestoreLambdaFunctionArn:
+    Description: "The ARN of the Lambda function to restore EC2 instances."
+    Value: !GetAtt RestoreLambdaFunction.Arn
+  BackupPlanId:
+    Description: "The ID of the Backup Plan."
+    Value: !Ref BackupPlan
