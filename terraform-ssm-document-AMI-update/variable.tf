@@ -6,6 +6,9 @@ variable "eventbridge" {
     region      = string
     account_id  = string
     document_name = string
+    schedule_expression = string
+    schedule_name = string
+    target_id = string
   })
 }
 
@@ -13,5 +16,6 @@ variable "eventbridge" {
 variable "ssmautomation" {
   type = object({
     document-name = string
+    ssm_document_type = string
   })
 }
